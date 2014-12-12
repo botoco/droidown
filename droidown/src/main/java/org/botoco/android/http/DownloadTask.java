@@ -259,7 +259,7 @@ public final class DownloadTask implements Runnable {
     /**
      * 初始化为正式下载做准备
      */
-    public void ready() {
+    public void prepare() {
         if (!loader.isInitialized()) {
             justGetReady = true;
             new Thread(this).start();

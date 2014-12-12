@@ -20,29 +20,30 @@ import java.util.regex.Pattern;
  * 文件下载器
  */
 public final class DownloadExecutor {
-    private static final String TAG = "DownloadExecutor"; // 设置LogCat日志标签
-    private static final String SUFFIX = ".droidown.udl";
-    private DownloadLogger logger;    // 下载进度信息记录器
+    private static final String TAG = "DownloadExecutor";   // 设置LogCat日志标签
+    private static final String SUFFIX = ".droidown.adl";   // 下载未完成前为文件添加的后缀名
+    private DownloadLogger logger;  // 下载进度信息记录器
     private DownloadListener listener;  // 下载进度监听器
     private DownloadThread[] threads;   // 根据线程数设置下载线程池
-    private Map<Integer, Long> threadData; // 缓存各线程下载的长度
-    private URL downloadUrl; // 下载路径
+    private Map<Integer, Long> threadData;  // 缓存各线程下载的长度
+    private URL downloadUrl;    // 下载路径
     private File saveDir;   // 下载保存到的文件夹
     private File saveFile;  // 数据保存到的本地文件
-    private File logFile;
+    private File logFile;   // 与下载文件对应的配置文件
     private boolean initialized;    // 初始化下载标志
     private boolean downloading;    // 下载进行中标志
     private boolean paused; // 停止下载标志
     private boolean finished;   // 完成下载标志
     private boolean failed; // 下载失败标志
-    private long createDateTime;
-    private long spentTime;
-    private long fileSize;   // 原始文件长度
-    private long downloadedSize; // 已下载文件长度
+    private long remoteLastModified;    // 远程文件最后一次被修改的时间，断点续传时有用
+    private long createDateTime;    // 下载初始化完成的时间
+    private long spentTime; // 下载过程使用了的时间
+    private long fileSize;  // 原始文件长度
+    private long downloadedSize;    // 已下载文件长度
     private long block; // 每条线程下载的长度
-    private long delay = 1000 * 5; // 下载不正常时重新连接的等待时间
-    private int retryLimit = 35; // 下载不正常时重新连接的最大次数
-    private int cacheSize = 1024 * 5;  // 下载缓冲区大小
+    private long delay = 1000 * 5;  // 下载不正常时重新连接的等待时间
+    private int retryLimit = 35;    // 下载不正常时重新连接的最大次数
+    private int cacheSize = 1024 * 5;   // 下载缓冲区大小
 
     /**
      * 获取文件的下载路径
@@ -220,13 +221,14 @@ public final class DownloadExecutor {
             throw new IllegalArgumentException("the directory to save the file, which can't be null");
         }
         this.saveDir = saveDir;
-        this.threads = new DownloadThread[(threadSize != null ? threadSize : 3)];   // 根据下载的线程数创建下载线程池
+        this.threads = new DownloadThread[(threadSize != null && threadSize > 0 ? threadSize : 3)]; // 根据下载的线程数创建下载线程池
         this.threadData = new ConcurrentHashMap<Integer, Long>();
         for (int i = 0; i < this.threads.length; i++) { // 遍历线程池
             this.threadData.put(i + 1, 0L);    // 初始化每条线程已经下载的数据长度为0
         }
+        this.remoteLastModified = 520 * 1314;   // 避免赋值-1、0、1这类即可
+
         this.logger = new DownloadLogger();
-        this.logger.setDownloadUrl(this.downloadUrl);
         this.logger.setThreadData(this.threadData);
     }
 
@@ -265,7 +267,7 @@ public final class DownloadExecutor {
                 this.threadData.put(i + 1, 0L);    // 初始化每条线程已经下载的数据长度为0
             }
             this.logger.setThreadData(this.threadData);
-            this.logger.setDownloadedSize(0);
+            this.logger.setDownloadedSize(this.downloadedSize);
             this.logger.setSpentTime(this.spentTime);
             this.logger.setCreateDateTime(this.createDateTime);
 
@@ -276,7 +278,7 @@ public final class DownloadExecutor {
         this.fileSize = logger.getFileSize();
         this.block = logger.getBlock();
 
-        this.initialized = true;
+        this.remoteLastModified = logger.getRemoteLastModified();
         print("已经下载的长度" + this.downloadedSize + "个字节"); // 打印出已经下载的数据总和
     }
 
@@ -305,31 +307,51 @@ public final class DownloadExecutor {
             conn.setRequestProperty("User-Agent", "Mozilla/4.0 (compatible; MSIE 8.0; Windows NT 5.2; Trident/4.0; .NET CLR 1.1.4322; .NET CLR 2.0.50727; .NET CLR 3.0.04506.30; .NET CLR 3.0.4506.2152; .NET CLR 3.5.30729)");    //设置用户代理
             conn.setRequestProperty("Connection", "Keep-Alive");    // 设置Connection的方式
             conn.connect(); // 和远程资源建立真正的连接，但尚无返回的数据流
-            printResponseHeader(conn);  // 答应返回的HTTP头字段集合
+            printResponseHeader(conn);  // 服务器响应返回的HTTP头字段集合
             if (conn.getResponseCode() == HttpURLConnection.HTTP_OK) {  // 此处的请求会打开返回流并获取返回的状态码，用于检查是否请求成功，当返回码为200时执行下面的代码
-                this.fileSize = Long.parseLong(conn.getHeaderField("Content-Length"));  // 根据响应获取文件大小
+                // 根据URL指向服务器上同名资源与本地已下载文件对比判断是否适用断点续传
+                long lastModified = conn.getLastModified();
+                if (lastModified == this.remoteLastModified) {
+                    this.initialized = true;
+                    if (this.listener != null) {
+                        this.listener.onInitialization(this, null);    // 通知下载初始化完成
+                    }
+                    return;
+                }
+
+                this.remoteLastModified = lastModified;
+                this.logger.setRemoteLastModified(this.remoteLastModified);
+
+                String contentLength = conn.getHeaderField("Content-Length");
+                if (contentLength != null) {
+                    this.fileSize = Long.parseLong(contentLength);  // 根据响应获取文件大小
+                }
                 if (this.fileSize <= 0) {
                     throw new RuntimeException("Unknown file size ");    // 当文件大小为小于等于零时抛出运行时异常
                 }
                 this.logger.setFileSize(this.fileSize);
 
                 this.downloadedSize = 0;    // 设置已经下载的长度为0
-                this.logger.setDownloadedSize(0);
+                this.logger.setDownloadedSize(this.downloadedSize);
 
                 String filename = getFileName(conn);    // 获取文件名称
                 this.saveFile = new File(saveDir, filename + DownloadExecutor.SUFFIX);    // 根据文件保存目录和文件名构建保存文件
                 this.logFile = new File(saveDir, filename + DownloadLogger.SUFFIX);
 
+                // 对downloadUrl的重新赋值需要在getFileName(conn)之后
+                this.downloadUrl = conn.getURL();   // 获取最终的URL以保证将要运行的DownloadThread目标一致
+                this.logger.setDownloadUrl(this.downloadUrl);
+
                 this.block = (this.fileSize % this.threads.length) == 0 ? this.fileSize / this.threads.length : this.fileSize / this.threads.length + 1;    // 计算每条线程下载的数据长度
                 this.logger.setBlock(this.block);
 
                 this.spentTime = 0;
-                this.logger.setSpentTime(0);
+                this.logger.setSpentTime(this.spentTime);
                 this.createDateTime = System.currentTimeMillis();
                 this.logger.setCreateDateTime(this.createDateTime);
 
-                if (!saveDir.exists()) {
-                    saveDir.mkdirs();    // 如果指定的文件不存在，则创建目录，此处可以创建多层目录
+                if (!saveDir.exists() && saveDir.mkdirs()) {    // 如果指定的文件不存在，则创建目录，此处可以创建多层目录
+                    print("'" + saveDir + "' has been created");
                 }
                 this.logger.write(this.logFile);
 
@@ -357,7 +379,6 @@ public final class DownloadExecutor {
      */
     private String getFileName(HttpURLConnection conn) {
         String filename = this.downloadUrl.toString().substring(this.downloadUrl.toString().lastIndexOf('/') + 1);    // 从下载路径的字符串中获取文件名称
-
         if ("".equals(filename.trim())) {   // 如果获取不到文件名称
             for (int i = 0; ; i++) {    // 无限循环遍历
                 String mine = conn.getHeaderField(i);   // 从返回的流中获取特定索引的头字段值
@@ -367,7 +388,7 @@ public final class DownloadExecutor {
                     if (m.find()) return m.group(1);    // 如果有符合正则表达规则的字符串
                 }
             }
-            filename = UUID.randomUUID() + ".tmp";  // 由网卡上的标识数字(每个网卡都有唯一的标识号)以及 CPU 时钟的唯一数字生成的的一个 16 字节的二进制作为文件名
+            filename = UUID.randomUUID() + ".suffix";  // 由网卡上的标识数字(每个网卡都有唯一的标识号)以及 CPU 时钟的唯一数字生成的的一个 16 字节的二进制作为文件名
         }
         return filename;
     }
@@ -435,10 +456,14 @@ public final class DownloadExecutor {
                     this.listener.onProgressing(this, this.downloadedSize);  // 通知目前已经下载完成的数据长度
                 }
             }
-            if (downloadedSize == this.fileSize) {
+            if (this.downloadedSize == this.fileSize) {
                 this.finished = true;
-                this.logFile.delete();
-                this.saveFile.renameTo(new File(saveDir, saveFile.getName().replace(DownloadExecutor.SUFFIX, "")));
+                boolean isLogFileDeleted = this.logFile.delete();
+                File newName = new File(saveDir, saveFile.getName().replace(DownloadExecutor.SUFFIX, ""));
+                boolean isSaveFileRenamed = this.saveFile.renameTo(newName);
+                if (isLogFileDeleted && isSaveFileRenamed) {
+                    print("location of the downloaded file: " + newName);
+                }
                 if (this.listener != null) {
                     this.listener.onFinish(this);  // 通知下载完成
                 }
@@ -542,7 +567,7 @@ public final class DownloadExecutor {
     private class DownloadThread extends Thread {
         private static final String TAG = "DownloadThread"; // 设置LogCat日志标签
         private int threadId = -1;  // 初始化线程id设置
-        private long downloadedSize;   // 该线程已经下载的数据长度
+        private long threadDownloadedSize;   // 该线程已经下载的数据长度
         private boolean retry;  // 该线程是否属于再次启动的
         private boolean working;    // 该线程有否正常工作的标志
         private boolean finished;   // 该线程是否结束的标志
@@ -551,14 +576,14 @@ public final class DownloadExecutor {
         /**
          * 初始化DownloadThread对象
          *
-         * @param downloader     FileDownloader对象
-         * @param downloadedSize 整个文件目前已经下载的大小
-         * @param threadId       线程的ID
+         * @param downloader           FileDownloader对象
+         * @param threadDownloadedSize 整个文件目前已经下载的大小
+         * @param threadId             线程的ID
          */
-        public DownloadThread(DownloadExecutor downloader, int threadId, long downloadedSize, boolean retry) {
+        public DownloadThread(DownloadExecutor downloader, int threadId, long threadDownloadedSize, boolean retry) {
             this.downloader = downloader;
             this.threadId = threadId;
-            this.downloadedSize = downloadedSize;
+            this.threadDownloadedSize = threadDownloadedSize;
             this.retry = retry;
         }
 
@@ -567,7 +592,7 @@ public final class DownloadExecutor {
          */
         @Override
         public void run() {
-            if (this.downloadedSize < block) { // 未下载完成
+            if (this.threadDownloadedSize < block) { // 未下载完成
                 this.working = true;
                 try {
                     if (this.retry) {
@@ -580,11 +605,16 @@ public final class DownloadExecutor {
                     http.setRequestProperty("Accept-Language", "zh-CN");    // 设置客户端使用的语言问中文
                     http.setRequestProperty("Referer", downloadUrl.toString()); // 设置请求的来源，便于对访问来源进行统计
                     http.setRequestProperty("Charset", "UTF-8");    // 设置通信编码为UTF-8
-                    long startPos = block * (threadId - 1) + downloadedSize;   // 开始位置
+                    long startPos = block * (threadId - 1) + threadDownloadedSize;   // 开始位置
                     long endPos = block * threadId - 1;  // 结束位置
                     http.setRequestProperty("Range", "bytes=" + startPos + "-" + endPos);   // 设置获取实体数据的范围,如果超过了实体数据的大小会自动返回实际的数据大小
                     http.setRequestProperty("User-Agent", "Mozilla/4.0 (compatible; MSIE 8.0; Windows NT 5.2; Trident/4.0; .NET CLR 1.1.4322; .NET CLR 2.0.50727; .NET CLR 3.0.04506.30; .NET CLR 3.0.4506.2152; .NET CLR 3.5.30729)"); // 客户端用户代理
                     http.setRequestProperty("Connection", "Keep-Alive");    // 使用长连接
+//                    printResponseHeader(http);
+
+                    if (remoteLastModified != http.getLastModified()) {
+                        throw new RuntimeException("been referred to a different version of the file downloading");
+                    }
 
                     InputStream inStream = http.getInputStream();   // 获取远程连接的输入流
                     byte[] buffer = new byte[cacheSize]; // 设置本地数据缓存的大小
@@ -594,8 +624,8 @@ public final class DownloadExecutor {
                     threadFile.seek(startPos);  // 文件指针指向开始下载的位置
                     while (!downloader.isPaused() && (offset = inStream.read(buffer)) != -1) {    // 但用户没有要求停止下载，同时没有到达请求数据的末尾时候会一直循环读取数据
                         threadFile.write(buffer, 0, offset);    // 直接把数据写到文件中
-                        this.downloadedSize += offset; // 把新下载的已经写到文件中的数据加入到下载长度中
-                        downloader.update(this.threadId, offset, this.downloadedSize); // 把该线程已经下载的数据长度更新到数据库和内存哈希表中
+                        this.threadDownloadedSize += offset; // 把新下载的已经写到文件中的数据加入到下载长度中
+                        downloader.update(this.threadId, offset, this.threadDownloadedSize);    // 把该线程已经下载的数据长度更新到数据库和内存哈希表中
                     }   // 该线程下载数据完毕或者下载被用户停止
                     threadFile.close(); // Closes this random access file stream and releases any system resources associated with the stream.
                     inStream.close();   // Concrete implementations of this class should free any resources during close

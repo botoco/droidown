@@ -20,6 +20,7 @@ public final class DownloadLogger implements Serializable {
     private long block; // 每条线程下载的长度
     private long createDateTime;    // 创建时间
     private long spentTime; // 下载耗时
+    private long remoteLastModified;    // 远程文件最后一次被修改的时间，断点续传时有用
 
     /**
      * 获取目标文件的下载路径
@@ -145,6 +146,14 @@ public final class DownloadLogger implements Serializable {
      */
     protected void setSpentTime(long spentTime) {
         this.spentTime = spentTime;
+    }
+
+    protected long getRemoteLastModified() {
+        return remoteLastModified;
+    }
+
+    protected void setRemoteLastModified(long remoteLastModified) {
+        this.remoteLastModified = remoteLastModified;
     }
 
     /**
