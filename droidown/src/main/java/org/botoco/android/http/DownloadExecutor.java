@@ -197,7 +197,7 @@ public final class DownloadExecutor {
     }
 
     /**
-     * 初始化一个下载器，默认的下载线程数量为3条，缓存空间为1024 * 5字节，下载遇到问题时会重新连接35次，每次等待时间1000 * 5毫秒
+     * 初始化一个下载器，默认的下载线程数量为1条，缓存空间为1024 * 5字节，下载遇到问题时会重新连接35次，每次等待时间1000 * 5毫秒
      *
      * @param downloadUrl 下载路径
      * @param saveDir     文件保存目录
@@ -209,7 +209,7 @@ public final class DownloadExecutor {
     }
 
     /**
-     * 初始化一个下载器，默认的下载线程数量为3条，缓存空间为1024 * 5字节，下载遇到问题时会重新连接35次，每次等待时间1000 * 5毫秒
+     * 初始化一个下载器，默认的下载线程数量为1条，缓存空间为1024 * 5字节，下载遇到问题时会重新连接35次，每次等待时间1000 * 5毫秒
      *
      * @param downloadUrl 下载路径
      * @param saveDir     文件保存目录
@@ -221,7 +221,7 @@ public final class DownloadExecutor {
             throw new IllegalArgumentException("the directory to save the file, which can't be null");
         }
         this.saveDir = saveDir;
-        this.threads = new DownloadThread[(threadSize != null && threadSize > 0 ? threadSize : 3)]; // 根据下载的线程数创建下载线程池
+        this.threads = new DownloadThread[(threadSize != null && threadSize > 0 ? threadSize : 1)]; // 根据下载的线程数创建下载线程池
         this.threadData = new ConcurrentHashMap<Integer, Long>();
         for (int i = 0; i < this.threads.length; i++) { // 遍历线程池
             this.threadData.put(i + 1, 0L);    // 初始化每条线程已经下载的数据长度为0
@@ -378,16 +378,16 @@ public final class DownloadExecutor {
      * @return 文件名
      */
     private String getFileName(HttpURLConnection conn) {
+        for (int i = 0; ; i++) {    // 无限循环遍历
+            String mine = conn.getHeaderField(i);   // 从返回的流中获取特定索引的头字段值
+            if (mine == null) break;    // 如果遍历到了返回头末尾这退出循环
+            if ("content-disposition".equals(conn.getHeaderFieldKey(i).toLowerCase())) {    // 获取content-disposition返回头字段，里面可能会包含文件名
+                Matcher m = Pattern.compile(".*filename=(.*)").matcher(mine.toLowerCase()); // 使用正则表达式查询文件名
+                if (m.find()) return m.group(1);    // 如果有符合正则表达规则的字符串
+            }
+        }
         String filename = this.downloadUrl.toString().substring(this.downloadUrl.toString().lastIndexOf('/') + 1);    // 从下载路径的字符串中获取文件名称
         if ("".equals(filename.trim())) {   // 如果获取不到文件名称
-            for (int i = 0; ; i++) {    // 无限循环遍历
-                String mine = conn.getHeaderField(i);   // 从返回的流中获取特定索引的头字段值
-                if (mine == null) break;    // 如果遍历到了返回头末尾这退出循环
-                if ("content-disposition".equals(conn.getHeaderFieldKey(i).toLowerCase())) {    // 获取content-disposition返回头字段，里面可能会包含文件名
-                    Matcher m = Pattern.compile(".*filename=(.*)").matcher(mine.toLowerCase()); // 使用正则表达式查询文件名
-                    if (m.find()) return m.group(1);    // 如果有符合正则表达规则的字符串
-                }
-            }
             filename = UUID.randomUUID() + ".suffix";  // 由网卡上的标识数字(每个网卡都有唯一的标识号)以及 CPU 时钟的唯一数字生成的的一个 16 字节的二进制作为文件名
         }
         return filename;

@@ -161,7 +161,7 @@ public final class DownloadTask implements Runnable {
     }
 
     /**
-     * 初始化一个下载任务，默认的下载线程数量为3条，缓存空间为1024 * 5字节，下载遇到问题时会重新连接35次，每次等待时间1000 * 5毫秒
+     * 初始化一个下载任务，默认的下载线程数量为1条，缓存空间为1024 * 5字节，下载遇到问题时会重新连接35次，每次等待时间1000 * 5毫秒
      *
      * @param downloadUrl   下载路径
      * @param saveDirectory 下载要保存到的目录
@@ -173,7 +173,7 @@ public final class DownloadTask implements Runnable {
     }
 
     /**
-     * 初始化一个下载任务，默认的下载线程数量为3条，缓存空间为1024 * 5字节，下载遇到问题时会重新连接35次，每次等待时间1000 * 5毫秒
+     * 初始化一个下载任务，默认的下载线程数量为1条，缓存空间为1024 * 5字节，下载遇到问题时会重新连接35次，每次等待时间1000 * 5毫秒
      *
      * @param downloadUrl   下载路径
      * @param saveDirectory 下载要保存到的目录
