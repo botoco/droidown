@@ -14,7 +14,6 @@ public final class DownloadTask implements Runnable {
     private static final String TAG = "DownloadTask";   // 设置LogCat日志标签
     private boolean justGetReady;   // 标识即将执行的操作（准备或开始下载）
     private DownloadExecutor loader;  // 文件下载器(下载线程的容器)
-    private DownloadListener listener;  // 下载进度监听器
 
     /**
      * 获取文件的下载地址
@@ -157,7 +156,7 @@ public final class DownloadTask implements Runnable {
      * @param listener 监听器
      */
     public void setTaskStatusListener(DownloadListener listener) {
-        this.listener = listener;
+        loader.setDownloadListener(listener);
     }
 
     /**
@@ -280,7 +279,6 @@ public final class DownloadTask implements Runnable {
      */
     @Override
     public void run() {
-        loader.setDownloadListener(listener);
         try {
             if (!loader.isInitialized()) {
                 loader.initialize();
